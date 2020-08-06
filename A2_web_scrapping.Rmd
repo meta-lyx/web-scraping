@@ -1,0 +1,257 @@
+---
+title: "Web Scraping"
+author: "Claire Li"
+date: "9/23/2019"
+output: html_document
+---
+# SSENSE website Jackets and Coats analysis using web scrapping.
+
+We scrapped data from the luxurious fashion website SSENSE using CSS selector.
+
+Because winter is coming, the category we are interested in is "Coats and Jackets." We scrapped all 1320 items, including their prices, brand names, and product names. 
+```{r setup,  echo = FALSE, include = FALSE}
+
+library(tidyverse)
+library(rvest)
+library(purrr)
+library(stringr)
+library(dbplyr)
+library(ggplot2)
+url_base <- "https://www.ssense.com/en-us/women/jackets-coats"
+page <- read_html(url_base)
+
+
+map_df(1:22, function(i) {
+  cat(".")
+
+  pg <- read_html(sprintf(url_base, i))
+
+  data.frame(
+             brands = 
+               html_text(html_nodes(pg, ".vspace1 .bold")),
+             product_names = 
+                html_text(html_nodes(pg, ".product-name-plp")),
+             prices = 
+               html_text(html_nodes(pg, ".price .price")),
+             stringsAsFactors=FALSE)
+
+}) -> price_comparison
+
+glimpse(price_comparison)
+
+price_comparison$prices <- gsub("[^[:alnum:]]", "", price_comparison$prices)
+
+trim <- function (x) gsub("^\\s+|\\s+$", "", x)
+price_comparison$product_names <- trim(price_comparison$product_names)
+```
+
+
+```{r price comparison}
+glimpse(price_comparison)
+```
+
+At first glance, we can see that the website offers high-end products that have a specific customer group, in that all the brands are designer brands and the products are aesthetically focused with little emphasis on affordability. Hence, we want to explore the relationship between price and product. 
+
+```{r cateogory, echo=FALSE}
+
+categorizing <-  function(x, patterns, replacements = patterns, fill = NA, ...)
+{
+    stopifnot(length(patterns) == length(replacements))
+
+    ans = rep_len(as.character(fill), length(x))    
+    empty = seq_along(x)
+
+    for(i in seq_along(patterns)) {
+        greps = grepl(patterns[[i]], x[empty], ...)
+        ans[empty[greps]] = replacements[[i]]  
+        empty = empty[!greps]
+    }
+
+    return(ans)
+}
+```
+
+
+```{r color and category, echo=FALSE}
+price_comparison$category <- categorizing(price_comparison$product_names, 
+                                          c("Blazer", "Bomber","Coat", "Denim",
+                "Down","Fur", "Shearling", "Jacket", "Leather",
+                "Trench","Vest"), fill = "Other", ignore.case = TRUE)
+
+price_comparison$color <- categorizing(price_comparison$product_names, 
+                                          c("Blue", "Black","Navy", "White",
+                "Beige","Tan", "Purple", "Beige", "Red","Green",
+                "Orange","Yellow","Brown","Olive","Pink","Violet","Indigo",
+                "Teal","Grey","Multicolor"
+                ), fill = "Other", ignore.case = TRUE)
+
+
+```
+
+
+
+We used partial matching to extract from product names color and the specific product type, such as "leather" or "blazer."
+
+
+```{r after adding two variables }
+glimpse(price_comparison)
+```
+## What is the most popular color?
+
+
+We can figure out the popularity of all the colors by counting the number of each color. We can then calculate the median prices for the colors. 
+
+In the graph we can observe that the darker the blue is, the cheaper the product is. We can see that the less popular colors, such as green and beige, also appear to be more expensive, while black coats seem to have a higher supply and thus a lower price. Grey coats seems to be a popular color with relatively affordable prices. 
+
+```{r color, echo=FALSE}
+price_comparison$prices <- as.numeric(price_comparison$prices)
+
+color_count <- price_comparison %>%
+  group_by(color)%>%
+  summarise(color_n = n(),median_price = median(prices)) %>%
+  filter(color_n > 50)
+
+color_count$median_price <- as.numeric(color_count$median_price)
+color_count$Price_Group =
+  cut(color_count$median_price,c(800,1000,1200,1400))
+color_count$Price_Group <- as.numeric(color_count$Price_Group)
+
+ggplot(color_count,aes(color, color_n,color = Price_Group)) +
+  geom_point(size = 5)+
+  coord_flip()+
+  labs(x = "Color", y = "Counts")+
+  theme_bw() +
+  theme(axis.line = element_line(colour = "black"),
+    panel.border = element_blank(),
+    panel.background = element_blank()) 
+
+```
+
+
+It appears that the most popular color for coats is black, which represents 44% of all the colors, followed by grey and navy, which are both fairly low-profile, winter-friendly colors. The pie chart corresponds with the color that each portion represents.
+
+
+
+```{r colorpie, echo=FALSE}
+pie_data <- price_comparison %>%
+  group_by(color)%>%
+  summarise(color_n = n()) %>%
+  filter(color_n > 50) 
+  
+  
+pie_asc <- pie_data[order(-pie_data$color_n),]
+
+lbls <- pie_asc$color
+pct <- round(pie_asc$color_n/sum(pie_asc$color_n)*100)
+lbls <- paste(lbls, pct) 
+lbls <- paste(lbls,"%",sep="") 
+
+pie(pie_asc$color_n,labels = lbls,border = FALSE,lty = NULL,
+    col= pie_asc$color,
+   main="Pie Chart of Color Frequencies")
+  
+
+
+```
+
+
+## What is the most expensive brands?
+```{r expensive brands, echo=FALSE}
+m_price <- 
+  aggregate(price_comparison$prices,list(price_comparison$brands),FUN=median, na.rm=TRUE)
+
+m_price$x <- as.numeric(m_price$x)
+m_price$Price_Group = cut(m_price$x,c(0,500,1000,1500,2000,2500,
+                                3000,3500,4000))
+m_price$Price_Group <- as.numeric(m_price$Price_Group) 
+
+m_price %>%
+  head(10,x) %>%
+  ggplot(aes(Group.1, x,col = Price_Group))+
+  geom_point(size = 5)+
+  coord_flip()+
+  labs(x = "Brand", y = "Price")+
+  ggtitle("Most Expensive Brands")+
+  theme_bw() +
+  theme(axis.line = element_line(colour = "black"),
+    panel.border = element_blank(),
+    panel.background = element_blank())
+
+
+
+```
+
+
+
+The price is indicated by different colors.
+
+Balenciage undoubtedly is the most expensive brand in this analysis.
+
+Interestingly, there are no brand whose median falls into the price bracket of 1500 and 3500. This gap indicates that the pricing of luxurious brands can differ significantly depending on their brands.
+
+## Most popular brands
+```{r brand, echo=FALSE}
+brand_count <- price_comparison %>%
+  group_by(brands)%>%
+  summarise(brand_n = n(), med_p = median(prices)) %>%
+  filter(brand_n > 30)
+
+brand_count$med_p <- as.numeric(brand_count$med_p)
+
+brand_count$Price_Group <- cut(
+  brand_count$med_p,c(0,500,1000,1500,2000,2500,
+                                3000))
+brand_count$Price_Group <- as.numeric(brand_count$Price_Group)
+
+ggplot(brand_count, aes(brands, brand_n, color = Price_Group)) +
+  geom_point(size = 5)+
+  coord_flip()+
+  xlab("Brands")+
+  ylab("Counts")+
+  ggtitle("Most Popular Brands")+
+  theme_bw() +
+  theme(axis.line = element_line(colour = "black"),
+    panel.border = element_blank(),
+    panel.background = element_blank()) 
+```
+
+
+
+
+
+Here we count the number of brands that occur most often in this dataset.
+
+
+We found that there is no overlap between this graph and the most expensive brands. This means that the website only carry a portion of very expensive brands. What is more, notice that here the price of popular brands is, in general, lower than that of the expensive brands.
+
+## Most popular category
+```{r kind, echo=FALSE}
+category_count <- price_comparison %>%
+  group_by(category)%>%
+  summarise(cat_n = n(), med_p_c = median(prices)) %>%
+  filter(cat_n > 30)
+
+category_count$med_p_c <- as.numeric(category_count$med_p_c)
+
+category_count$Price_Group <- cut(
+  category_count$med_p_c,c(500,700, 900,1200,1300))
+category_count$Price_Group <- as.numeric(category_count$Price_Group)
+
+ggplot(category_count, aes(category, cat_n, color = Price_Group)) +
+  geom_point(size = 5)+
+  coord_flip()+
+  xlab("Category")+
+  ylab("Counts")+
+  ggtitle("Most Popular Categories")+
+  theme_bw() +
+  theme(axis.line = element_line(colour = "black"),
+    panel.border = element_blank(),
+    panel.background = element_blank())
+```
+
+
+
+
+The most popular type of winter apparel is "coat" followed by "blazer." They are also the two most expensive types of winter clothing.
+
+To sum up, winter clothings are monotonic in terms of their color scale. Judging from the items that the website carries, we see that even for a luxurious fashion website, affordability and popularity still go hand in hand together. Going forward, "high fashion" needs to appeal to a wider demographic if it wants to survive in this very competitive fashion apparel business. 
